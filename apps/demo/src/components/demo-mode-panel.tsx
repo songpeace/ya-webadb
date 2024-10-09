@@ -84,7 +84,7 @@ class DemoModePanelState {
             async (device) => {
                 if (device) {
                     runInAction(() => (this.demoMode = new DemoMode(device)));
-                    const allowed = await this.demoMode!.getAllowed();
+                    const allowed = false;
                     runInAction(() => (this.allowed = allowed));
                     if (allowed) {
                         const enabled = await this.demoMode!.getEnabled();
