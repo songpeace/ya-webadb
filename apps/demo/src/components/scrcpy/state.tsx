@@ -244,8 +244,8 @@ export class ScrcpyPageState {
                         SETTING_STATE.settings.videoCodec!
                     ];
                 if (capability) {
-                    videoCodecOptions.value.profile = capability.maxProfile;
-                    videoCodecOptions.value.level = capability.maxLevel;
+                    videoCodecOptions.options.profile = capability.maxProfile;
+                    videoCodecOptions.options.level = capability.maxLevel;
                 }
             }
 

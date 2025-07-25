@@ -6,6 +6,7 @@ import {
     SpinButton,
     Toggle,
 } from "@fluentui/react";
+import { AdbBanner } from "@yume-chan/adb/esm/banner";
 import {
     DemoMode,
     DemoModeMobileDataType,
@@ -71,6 +72,7 @@ const StatusBarModeOptions = DemoModeStatusBarModes.map((key) => ({
 
 class DemoModePanelState {
     demoMode: DemoMode | undefined;
+    deviceBanner: AdbBanner | undefined;
 
     allowed = false;
     enabled = false;
@@ -83,14 +85,38 @@ class DemoModePanelState {
             () => GLOBAL_STATE.adb,
             async (device) => {
                 if (device) {
-                    runInAction(() => (this.demoMode = new DemoMode(device)));
-                    const allowed = await this.demoMode!.getAllowed();
-                    runInAction(() => (this.allowed = allowed));
-                    if (allowed) {
-                        const enabled = await this.demoMode!.getEnabled();
-                        runInAction(() => (this.enabled = enabled));
+                    // 获取设备 banner 信息
+                    this.deviceBanner = device.banner;
+                    
+                    // 只有当 product 不为空时才创建 DemoMode 并调用 getAllowed
+                    if (this.deviceBanner && this.deviceBanner.product) {
+                        runInAction(() => (this.demoMode = new DemoMode(device)));
+                        
+                        try {
+                            const allowed = await this.demoMode!.getAllowed();
+                            runInAction(() => (this.allowed = allowed));
+                            if (allowed) {
+                                const enabled = await this.demoMode!.getEnabled();
+                                runInAction(() => (this.enabled = enabled));
+                            }
+                        } catch (error) {
+                            console.error("Error checking demo mode status:", error);
+                            runInAction(() => {
+                                this.allowed = false;
+                                this.enabled = false;
+                            });
+                        }
+                    } else {
+                        // 如果 product 为空，不调用 getAllowed
+                        console.log("Device product information is empty, skipping demo mode check");
+                        runInAction(() => {
+                            this.demoMode = undefined;
+                            this.allowed = false;
+                            this.enabled = false;
+                        });
                     }
                 } else {
+                    this.deviceBanner = undefined;
                     this.demoMode = undefined;
                     this.allowed = false;
                     this.enabled = false;
