@@ -9,7 +9,9 @@ import {
     SpinnerSize,
     Stack,
     TextField,
-    TooltipHost
+    TooltipHost,
+    Text,
+    Separator
 } from "@fluentui/react";
 import { observer } from "mobx-react-lite";
 import { NextPage } from "next";
@@ -27,24 +29,21 @@ interface Command {
     description?: string;
 }
 
+interface CommandCategory {
+    category: string;
+    commands: Command[];
+}
+
 const Devinfo: NextPage = () => {
     const [output, setOutput] = useState<string>("");
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
-    const [commands, setCommands] = useState<Command[]>([]);
+    const [commandCategories, setCommandCategories] = useState<CommandCategory[]>([]);
+    const [activeCommand, setActiveCommand] = useState<string | null>(null);
 
     useEffect(() => {
-        // If you need to fetch the commands.json dynamically, you can do it here
-        // For example if it's in the public folder:
-        /*
-        fetch('/commands.json')
-            .then(response => response.json())
-            .then(data => setCommands(data))
-            .catch(err => console.error('Error loading commands:', err));
-        */
-        
-        // Otherwise, if it's imported directly, just set it
-        setCommands(commandsData);
+        // Set commands from imported data
+        setCommandCategories(commandsData);
     }, []);
 
     const handleCommand = async (command: string) => {
@@ -53,6 +52,7 @@ const Devinfo: NextPage = () => {
         try {
             setIsLoading(true);
             setError(null);
+            setActiveCommand(command);
             
             const result = await GLOBAL_STATE.adb.power.shell(command);
             setOutput(result);
@@ -76,60 +76,77 @@ const Devinfo: NextPage = () => {
                 </MessageBar>
             </div>
 
-            <div style={{ 
-                display: "flex", 
-                flexWrap: "wrap", 
-                gap: "10px",
-                marginBottom: "20px"
-            }}>
-                {commands.map((cmd, index) => (
-                    <TooltipHost 
-                        key={index} 
-                        content={cmd.description || ""}
-                        id={`cmd-tooltip-${index}`}
-                    >
-                        <DefaultButton
-                            text={cmd.name}
-                            disabled={!GLOBAL_STATE.adb || isLoading}
-                            onClick={() => handleCommand(cmd.command)}
-                            aria-describedby={`cmd-tooltip-${index}`}
-                        >
-                            {isLoading && <Spinner size={SpinnerSize.small} style={{ marginLeft: 8 }} />}
-                        </DefaultButton>
-                    </TooltipHost>
-                ))}
+            {/* Display output area fixed at the top */}
+            <div style={{ marginBottom: 20 }}>
+                {isLoading ? (
+                    <Stack horizontalAlign="center" verticalAlign="center" style={{ padding: 20 }}>
+                        <Spinner size={SpinnerSize.large} label={`Running: ${activeCommand}`} />
+                    </Stack>
+                ) : error ? (
+                    <MessageBar messageBarType={MessageBarType.error}>
+                        Error: {error}
+                    </MessageBar>
+                ) : output ? (
+                    <TextField
+                        label="Result"
+                        multiline
+                        rows={10}
+                        readOnly
+                        value={output}
+                        styles={{
+                            field: {
+                                fontFamily: "monospace",
+                                fontSize: 14,
+                                backgroundColor: "#f5f5f5",
+                                overflowX: "auto",
+                                whiteSpace: "pre",
+                            },
+                            wrapper: {
+                                width: "100%",
+                            }
+                        }}
+                    />
+                ) : (
+                    <Text>Select a command to see the result</Text>
+                )}
             </div>
 
-            {/* Display output */}
-            {(output || error) && (
-                <div style={{ marginTop: 10 }}>
-                    {error ? (
-                        <MessageBar messageBarType={MessageBarType.error}>
-                            Error: {error}
-                        </MessageBar>
-                    ) : (
-                        <TextField
-                            label="Result"
-                            multiline
-                            rows={10}
-                            readOnly
-                            value={output}
-                            styles={{
-                                field: {
-                                    fontFamily: "monospace",
-                                    fontSize: 14,
-                                    backgroundColor: "#f5f5f5",
-                                    overflowX: "auto",
-                                    whiteSpace: "pre",
-                                },
-                                wrapper: {
-                                    width: "100%",
-                                }
-                            }}
-                        />
-                    )}
-                </div>
-            )}
+            {/* Command buttons area with scrolling */}
+            <div style={{ 
+                maxHeight: "calc(100vh - 350px)",
+                overflowY: "auto",
+                padding: "0 10px"
+            }}>
+                {commandCategories.map((category, categoryIndex) => (
+                    <div key={categoryIndex} style={{ marginBottom: 20 }}>
+                        <Separator alignContent="start">
+                            <Text variant="large" style={{ fontWeight: 600 }}>{category.category}</Text>
+                        </Separator>
+
+                        <div style={{
+                            display: "flex",
+                            flexWrap: "wrap",
+                            gap: "10px",
+                            marginTop: 10
+                        }}>
+                            {category.commands.map((cmd, index) => (
+                                <TooltipHost
+                                    key={index}
+                                    content={cmd.description || ""}
+                                    id={`cmd-tooltip-${categoryIndex}-${index}`}
+                                >
+                                    <DefaultButton
+                                        text={cmd.name}
+                                        disabled={!GLOBAL_STATE.adb || isLoading}
+                                        onClick={() => handleCommand(cmd.command)}
+                                        aria-describedby={`cmd-tooltip-${categoryIndex}-${index}`}
+                                    />
+                                </TooltipHost>
+                            ))}
+                        </div>
+                    </div>
+                ))}
+            </div>
         </Stack>
     );
 };

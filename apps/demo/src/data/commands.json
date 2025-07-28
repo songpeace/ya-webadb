@@ -1,7 +1,42 @@
 [
-    {
-        "name": "ls",
+  {
+    "category": "Common",
+    "commands": [
+      {
+        "name": "List Files",
         "command": "ls",
-        "description": "ls"
-    }
+        "description": "List files and directories in the current directory"
+      },
+      {
+        "name": "Disk Space",
+        "command": "df -h",
+        "description": "Show disk space usage in human-readable format"
+      },
+      {
+        "name": "Memory Info",
+        "command": "cat /proc/meminfo",
+        "description": "Display system memory information"
+      }
+    ]
+  },
+  {
+    "category": "System",
+    "commands": [
+      {
+        "name": "Android Version",
+        "command": "getprop ro.build.version.release",
+        "description": "Show Android version"
+      },
+      {
+        "name": "Device Model",
+        "command": "getprop ro.product.model",
+        "description": "Show device model name"
+      },
+      {
+        "name": "Build Number",
+        "command": "getprop ro.build.display.id",
+        "description": "Show build number/identifier"
+      }
+    ]
+  }
 ]
