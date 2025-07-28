@@ -7,20 +7,22 @@ import {
     StackItem,
 } from "@fluentui/react";
 import { makeStyles, mergeClasses, shorthands } from "@griffel/react";
+import { observer } from "mobx-react-lite";
 import type { AppProps } from "next/app";
 import getConfig from "next/config";
 import Head from "next/head";
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Connect, ErrorDialogProvider } from "../components";
+import { GLOBAL_STATE } from "../state";
 import "../styles/globals.css";
 import { Icons } from "../utils";
 import { register as registerIcons } from "../utils/icons";
 
 registerIcons();
 
-const ROUTES = [
+const BASE_ROUTES = [
     {
         url: "/",
         icon: Icons.Bookmark,
@@ -128,18 +130,37 @@ const {
     publicRuntimeConfig: { basePath },
 } = getConfig();
 
-function App({ Component, pageProps }: AppProps) {
+const AppComponent = ({ Component, pageProps }: AppProps) => {
     const classes = useClasses();
+    const router = useRouter();
 
     const [leftPanelVisible, setLeftPanelVisible] = useState(false);
     const toggleLeftPanel = useCallback(() => {
         setLeftPanelVisible((value) => !value);
     }, []);
+
     useEffect(() => {
         setLeftPanelVisible(innerWidth > 650);
     }, []);
 
-    const router = useRouter();
+// 计算当前应该显示的路由列表
+const routes = useMemo(() => {
+    let routes = [...BASE_ROUTES];
+
+    if (GLOBAL_STATE.adb && (!GLOBAL_STATE.adb.banner || !GLOBAL_STATE.adb.banner.product)) {
+        // Replace device-info with deviceinfo when product is empty
+        routes = routes.map(route =>
+            route.url === "/device-info"
+                ? {
+                    url: "/devinfo",
+                    icon: Icons.Phone,
+                    name: "Device Info",
+                  }
+                : route
+        );
+    }
+    return routes;
+}, [GLOBAL_STATE.adb, GLOBAL_STATE.adb?.banner?.product]);
 
     if ("noLayout" in Component) {
         return <Component {...pageProps} />;
@@ -201,7 +222,7 @@ function App({ Component, pageProps }: AppProps) {
                         <Nav
                             groups={[
                                 {
-                                    links: ROUTES.map((route) => ({
+                                    links: routes.map((route) => ({
                                         ...route,
                                         key: route.url,
                                     })),
@@ -220,5 +241,7 @@ function App({ Component, pageProps }: AppProps) {
         </ErrorDialogProvider>
     );
 }
+
+const App = observer(AppComponent);
 
 export default App;

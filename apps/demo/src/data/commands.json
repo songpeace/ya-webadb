@@ -1,0 +1,7 @@
+[
+    {
+        "name": "ls",
+        "command": "ls",
+        "description": "ls"
+    }
+]

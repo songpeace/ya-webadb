@@ -55,4 +55,19 @@ export class AdbPower extends AdbCommandBase {
     samsungOdin() {
         return this.reboot("download");
     }
+    /**
+     * Execute a shell command on the device
+     *
+     * @param {string} command - The command to execute
+     * @returns {Promise<string>} - Output of the command
+     */
+    async shell(command: string) {
+        const args = command.trim().split(/\s+/);
+
+        if (args.length === 0) {
+            throw new Error("Empty command");
+        }
+
+        return this.adb.subprocess.spawnAndWaitLegacy(args);
+    }
 }
