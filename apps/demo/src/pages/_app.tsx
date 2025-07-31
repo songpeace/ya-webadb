@@ -143,24 +143,35 @@ const AppComponent = ({ Component, pageProps }: AppProps) => {
         setLeftPanelVisible(innerWidth > 650);
     }, []);
 
-// 计算当前应该显示的路由列表
-const routes = useMemo(() => {
-    let routes = [...BASE_ROUTES];
-
-    if (GLOBAL_STATE.adb && (!GLOBAL_STATE.adb.banner || !GLOBAL_STATE.adb.banner.product)) {
-        // Replace device-info with deviceinfo when product is empty
-        routes = routes.map(route =>
-            route.url === "/device-info"
-                ? {
-                    url: "/devinfo",
-                    icon: Icons.Phone,
-                    name: "Device Info",
-                  }
-                : route
-        );
-    }
-    return routes;
-}, [GLOBAL_STATE.adb, GLOBAL_STATE.adb?.banner?.product]);
+    // 计算当前应该显示的路由列表
+    const routes = useMemo(() => {
+        let routes = [...BASE_ROUTES];
+        if (GLOBAL_STATE.adb && (!GLOBAL_STATE.adb.banner || !GLOBAL_STATE.adb.banner.product)) {
+            // Replace device-info with devinfo and shell with interactive_shell when product is empty
+            routes = routes.map(route => {
+                if (route.url === "/device-info") {
+                    return {
+                        url: "/devinfo",
+                        icon: Icons.Phone,
+                        name: "Device Info",
+                    };
+                }
+                if (route.url === "/shell") {
+                    return {
+                        ...route,
+                        url: "/interactive_shell",
+                    };
+                }
+                return route;
+            });
+            routes.push({
+                url: "/bluetooth",
+                icon: Icons.WifiSettings, // 或者使用其他合适的图标
+                name: "Bluetooth",
+            });
+        }
+        return routes;
+    }, [GLOBAL_STATE.adb, GLOBAL_STATE.adb?.banner?.product]);
 
     if ("noLayout" in Component) {
         return <Component {...pageProps} />;
