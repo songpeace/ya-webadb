@@ -24,20 +24,28 @@ export class GlobalState {
 
     logs: PacketLogItem[] = [];
 
-    // Interactive Shell state
-    shell: AdbSubprocessProtocol | undefined = undefined;
-    shellOutput = "";
-    shellConnected = false;
-    shellWriter: WritableStreamDefaultWriter<Consumable<Uint8Array>> | undefined = undefined;
+    // Interactive Shell state - 支持多个shell标签页
+    shells: Map<string, {
+        shell: AdbSubprocessProtocol;
+        output: string;
+        connected: boolean;
+        writer: WritableStreamDefaultWriter<Consumable<Uint8Array>>;
+    }> = new Map();
+    activeShellId = "";
+    shellTabCounter = 0;
 
     constructor() {
         makeAutoObservable(this, {
             hideErrorDialog: action.bound,
             logs: observable.shallow,
+            shells: observable,
+            createShellTab: action.bound,
+            setActiveShellId: action.bound,
             setShellOutput: action.bound,
             setShellConnected: action.bound,
             clearShellOutput: action.bound,
-            cleanupShell: action.bound,
+            closeShellTab: action.bound,
+            cleanupAllShells: action.bound,
         });
     }
 
@@ -72,42 +80,89 @@ export class GlobalState {
         this.logs.length = 0;
     }
 
-    setShellOutput(output: string) {
-        this.shellOutput = output;
+    createShellTab(): string {
+        this.shellTabCounter++;
+        const shellId = `shell-${this.shellTabCounter}`;
+        // 创建一个占位符，等到需要时再创建实际的shell
+        this.shells.set(shellId, {
+            shell: null as any, // 临时占位符
+            output: "",
+            connected: false,
+            writer: null as any, // 临时占位符
+        });
+        return shellId;
     }
 
-    setShellConnected(connected: boolean) {
-        this.shellConnected = connected;
+    setActiveShellId(shellId: string) {
+        this.activeShellId = shellId;
     }
 
-    clearShellOutput() {
-        this.shellOutput = "";
-    }
-
-    async cleanupShell() {
-        try {
-            this.shellConnected = false;
-
-            if (this.shellWriter) {
-                try {
-                    await this.shellWriter.close();
-                } catch (error) {
-                    console.log("Writer already closed");
-                }
-                this.shellWriter = undefined;
-            }
-
-            if (this.shell) {
-                try {
-                    this.shell.kill();
-                } catch (error) {
-                    console.log("Error killing shell:", error);
-                }
-                this.shell = undefined;
-            }
-        } catch (error) {
-            console.error("Error during shell cleanup:", error);
+    setShellOutput(shellId: string, output: string) {
+        const shellData = this.shells.get(shellId);
+        if (shellData) {
+            shellData.output = output;
         }
+    }
+
+    setShellConnected(shellId: string, connected: boolean) {
+        const shellData = this.shells.get(shellId);
+        if (shellData) {
+            shellData.connected = connected;
+        }
+    }
+
+    clearShellOutput(shellId: string) {
+        const shellData = this.shells.get(shellId);
+        if (shellData) {
+            shellData.output = "";
+        }
+    }
+
+    async closeShellTab(shellId: string) {
+        const shellData = this.shells.get(shellId);
+        if (shellData) {
+            try {
+                if (shellData.writer) {
+                    try {
+                        await shellData.writer.close();
+                    } catch (error) {
+                        console.log("Writer already closed");
+                    }
+                }
+                
+                if (shellData.shell) {
+                    try {
+                        shellData.shell.kill();
+                    } catch (error) {
+                        console.log("Error killing shell:", error);
+                    }
+                }
+            } catch (error) {
+                console.error("Error during shell cleanup:", error);
+            }
+        }
+        
+        this.shells.delete(shellId);
+        
+        // 如果关闭的是当前活跃的标签页，切换到其他标签页
+        if (this.activeShellId === shellId) {
+            const remainingShells = Array.from(this.shells.keys());
+            this.activeShellId = remainingShells.length > 0 ? remainingShells[0] : "";
+        }
+    }
+
+    async cleanupAllShells() {
+        for (const [shellId] of this.shells) {
+            await this.closeShellTab(shellId);
+        }
+    }
+
+    getActiveShell() {
+        return this.shells.get(this.activeShellId);
+    }
+
+    getShellTabs() {
+        return Array.from(this.shells.keys());
     }
 }
 

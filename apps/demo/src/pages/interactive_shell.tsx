@@ -1,4 +1,4 @@
-import { DefaultButton } from "@fluentui/react";
+import { DefaultButton, IconButton } from "@fluentui/react";
 import { AdbSubprocessProtocol } from "@yume-chan/adb";
 import {
     Consumable,
@@ -8,17 +8,84 @@ import {
 } from "@yume-chan/stream-extra";
 import { observer } from "mobx-react-lite";
 import { NextPage } from "next";
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { GLOBAL_STATE } from "../state";
 
-const InteractiveShell: NextPage = () => {
-    const shellContainerRef = useRef<HTMLDivElement>(null);
+interface ShellTabProps {
+    shellId: string;
+    isActive: boolean;
+    onActivate: () => void;
+    onClose: () => void;
+}
+
+const ShellTab: React.FC<ShellTabProps & { tabIndex: number }> = ({ shellId, isActive, onActivate, onClose, tabIndex }) => {
+    const shellData = GLOBAL_STATE.shells.get(shellId);
     
-    // 使用全局状态
-    const shell = GLOBAL_STATE.shell;
-    const output = GLOBAL_STATE.shellOutput;
-    const isConnected = GLOBAL_STATE.shellConnected;
+    return (
+        <div
+            style={{
+                display: "flex",
+                alignItems: "center",
+                padding: "8px 12px",
+                backgroundColor: isActive ? "#0078d4" : "#f3f2f1",
+                color: isActive ? "white" : "black",
+                border: "1px solid #ccc",
+                borderBottom: isActive ? "none" : "1px solid #ccc",
+                cursor: "pointer",
+                borderTopLeftRadius: 4,
+                borderTopRightRadius: 4,
+                marginRight: 2,
+                minWidth: 80,
+            }}
+            onClick={onActivate}
+        >
+            <span style={{ marginRight: 8 }}>Shell {tabIndex}</span>
+            <div
+                style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: "50%",
+                    backgroundColor: shellData?.connected ? "#00ff00" : "#ff0000",
+                    marginRight: 8,
+                }}
+            />
+            <div
+                onClick={(e) => {
+                    e.stopPropagation();
+                    onClose();
+                }}
+                style={{
+                    width: 16,
+                    height: 16,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: "pointer",
+                    fontSize: 12,
+                    fontWeight: "bold",
+                    color: isActive ? "white" : "#323130",
+                    borderRadius: 2,
+                }}
+                onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = isActive ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.1)";
+                }}
+                onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = "transparent";
+                }}
+            >
+                ×
+            </div>
+        </div>
+    );
+};
+
+const ShellTerminal: React.FC<{ shellId: string }> = observer(({ shellId }) => {
+    const shellContainerRef = useRef<HTMLDivElement>(null);
     const writerRef = useRef<WritableStreamDefaultWriter<Consumable<Uint8Array>> | null>(null);
+    
+    const shellData = GLOBAL_STATE.shells.get(shellId);
+    const output = shellData?.output || "";
+    const isConnected = shellData?.connected || false;
 
     // 简单的字符处理
     const processOutput = (newText: string, currentOutput: string): string => {
@@ -65,14 +132,13 @@ const InteractiveShell: NextPage = () => {
         return result;
     };
 
-    // 自动滚动和设置光标 - 分离这些操作
+    // 自动滚动和设置光标
     const scrollToBottom = () => {
         if (shellContainerRef.current) {
             shellContainerRef.current.scrollTop = shellContainerRef.current.scrollHeight;
         }
     };
 
-    // 设置光标到末尾并滚动到底部
     const updateCursorAndScroll = () => {
         if (shellContainerRef.current && isConnected) {
             const container = shellContainerRef.current;
@@ -102,7 +168,6 @@ const InteractiveShell: NextPage = () => {
     };
 
     useEffect(() => {
-        // 当output更新时，更新光标位置和滚动
         if (isConnected) {
             updateCursorAndScroll();
         }
@@ -110,37 +175,40 @@ const InteractiveShell: NextPage = () => {
 
     useEffect(() => {
         initializeShell();
-        // 移除cleanup，让shell在页面切换时保持活跃
-    }, []);
+    }, [shellId]);
 
     const initializeShell = async () => {
         if (!GLOBAL_STATE.adb) return;
 
         // 如果已经有连接的shell，直接返回
-        if (GLOBAL_STATE.shell && GLOBAL_STATE.shellConnected) {
-            writerRef.current = GLOBAL_STATE.shellWriter || null;
+        if (shellData && shellData.connected && shellData.shell) {
+            writerRef.current = shellData.writer;
             return;
         }
 
         try {
-            GLOBAL_STATE.setShellOutput("Initializing shell...\n");
+            GLOBAL_STATE.setShellOutput(shellId, "Initializing shell...\n");
             
             const shellInstance = await GLOBAL_STATE.adb.subprocess.shell();
-            GLOBAL_STATE.shell = shellInstance;
-            
             const writer = shellInstance.stdin.getWriter();
             writerRef.current = writer;
-            GLOBAL_STATE.shellWriter = writer;
 
-            // 使用全局状态中的输出作为基础，而不是重置为空字符串
-            let currentOutput = GLOBAL_STATE.shellOutput;
+            // 创建或更新shell数据
+            GLOBAL_STATE.shells.set(shellId, {
+                shell: shellInstance,
+                output: "Initializing shell...\n",
+                connected: true,
+                writer: writer,
+            });
+
+            let currentOutput = "Initializing shell...\n";
 
             shellInstance.stdout.pipeTo(
                 new WritableStream({
                     write: (chunk) => {
                         const text = new TextDecoder().decode(chunk);
                         currentOutput = processOutput(text, currentOutput);
-                        GLOBAL_STATE.setShellOutput(currentOutput);
+                        GLOBAL_STATE.setShellOutput(shellId, currentOutput);
                     },
                     close() {
                         console.log("stdout stream closed");
@@ -158,7 +226,7 @@ const InteractiveShell: NextPage = () => {
                     write: (chunk) => {
                         const text = new TextDecoder().decode(chunk);
                         currentOutput += text;
-                        GLOBAL_STATE.setShellOutput(currentOutput);
+                        GLOBAL_STATE.setShellOutput(shellId, currentOutput);
                     },
                     close() {
                         console.log("stderr stream closed");
@@ -172,19 +240,23 @@ const InteractiveShell: NextPage = () => {
             });
 
             shellInstance.exit.then((exitCode) => {
-                GLOBAL_STATE.setShellOutput(GLOBAL_STATE.shellOutput + `\n[Process exited with code: ${exitCode}]\n`);
-                GLOBAL_STATE.setShellConnected(false);
+                const shellData = GLOBAL_STATE.shells.get(shellId);
+                if (shellData) {
+                    GLOBAL_STATE.setShellOutput(shellId, shellData.output + `\n[Process exited with code: ${exitCode}]\n`);
+                    GLOBAL_STATE.setShellConnected(shellId, false);
+                }
             }).catch(error => {
                 console.log("Shell exit error:", error);
-                GLOBAL_STATE.setShellOutput(GLOBAL_STATE.shellOutput + `\n[Shell disconnected]\n`);
-                GLOBAL_STATE.setShellConnected(false);
+                const shellData = GLOBAL_STATE.shells.get(shellId);
+                if (shellData) {
+                    GLOBAL_STATE.setShellOutput(shellId, shellData.output + `\n[Shell disconnected]\n`);
+                    GLOBAL_STATE.setShellConnected(shellId, false);
+                }
             });
-
-            GLOBAL_STATE.setShellConnected(true);
             
         } catch (error) {
             console.error("Failed to initialize shell:", error);
-            GLOBAL_STATE.setShellOutput(`[ERROR]: Failed to initialize shell: ${error}\n`);
+            GLOBAL_STATE.setShellOutput(shellId, `[ERROR]: Failed to initialize shell: ${error}\n`);
         }
     };
 
@@ -197,7 +269,10 @@ const InteractiveShell: NextPage = () => {
             await ConsumableWritableStream.write(writerRef.current, data);
         } catch (error) {
             console.error("Failed to send command:", error);
-            GLOBAL_STATE.setShellOutput(GLOBAL_STATE.shellOutput + `[ERROR]: Failed to send command: ${error}\n`);
+            const shellData = GLOBAL_STATE.shells.get(shellId);
+            if (shellData) {
+                GLOBAL_STATE.setShellOutput(shellId, shellData.output + `[ERROR]: Failed to send command: ${error}\n`);
+            }
         }
     };
 
@@ -278,7 +353,6 @@ const InteractiveShell: NextPage = () => {
         await sendCommand(pastedText);
     };
 
-    // 完全阻止contentEditable的默认编辑行为
     const handleBeforeInput = (event: React.FormEvent<HTMLDivElement>) => {
         event.preventDefault();
         return false;
@@ -286,20 +360,10 @@ const InteractiveShell: NextPage = () => {
 
     const handleInput = (event: React.FormEvent<HTMLDivElement>) => {
         event.preventDefault();
-        // 如果内容被意外修改，恢复正确的内容
         if (shellContainerRef.current && shellContainerRef.current.textContent !== output) {
             updateCursorAndScroll();
         }
         return false;
-    };
-
-    const cleanup = async () => {
-        await GLOBAL_STATE.cleanupShell();
-        writerRef.current = null;
-    };
-
-    const clearOutput = () => {
-        GLOBAL_STATE.clearShellOutput();
     };
 
     const handleClick = () => {
@@ -308,12 +372,15 @@ const InteractiveShell: NextPage = () => {
         }
     };
 
+    const clearOutput = () => {
+        GLOBAL_STATE.clearShellOutput(shellId);
+    };
+
     return (
         <div style={{ 
-            height: "100vh", 
-            padding: 20, 
             display: "flex", 
             flexDirection: "column",
+            height: "100%",
             gap: 10
         }}>
             <div style={{ display: "flex", gap: 10, flexShrink: 0 }}>
@@ -325,11 +392,6 @@ const InteractiveShell: NextPage = () => {
                 <DefaultButton 
                     text="Clear Output" 
                     onClick={clearOutput}
-                />
-                <DefaultButton 
-                    text="Disconnect" 
-                    onClick={cleanup}
-                    disabled={!isConnected}
                 />
             </div>
 
@@ -360,7 +422,6 @@ const InteractiveShell: NextPage = () => {
                 }}
                 tabIndex={0}
             >
-                {/* 显示输出内容，未连接时显示等待消息 */}
                 {output || (!isConnected ? "Waiting for shell connection..." : "")}
             </div>
 
@@ -369,6 +430,121 @@ const InteractiveShell: NextPage = () => {
             </div>
         </div>
     );
-};
+});
 
-export default observer(InteractiveShell);
+const InteractiveShell: NextPage = observer(() => {
+    const [shellTabs, setShellTabs] = useState<string[]>([]);
+
+    useEffect(() => {
+        // 从全局状态恢复标签页
+        const existingTabs = GLOBAL_STATE.getShellTabs();
+        if (existingTabs.length > 0) {
+            setShellTabs(existingTabs);
+            // 如果没有活跃的标签页，设置第一个为活跃
+            if (!GLOBAL_STATE.activeShellId) {
+                GLOBAL_STATE.setActiveShellId(existingTabs[0]);
+            }
+        } else {
+            // 初始化时创建第一个标签页
+            const firstShellId = GLOBAL_STATE.createShellTab();
+            setShellTabs([firstShellId]);
+            GLOBAL_STATE.setActiveShellId(firstShellId);
+        }
+    }, []);
+
+    const addNewTab = () => {
+        const newShellId = GLOBAL_STATE.createShellTab();
+        setShellTabs([...shellTabs, newShellId]);
+        GLOBAL_STATE.setActiveShellId(newShellId);
+    };
+
+    const closeTab = (shellId: string) => {
+        if (shellTabs.length <= 1) return; // 至少保留一个标签页
+        
+        GLOBAL_STATE.closeShellTab(shellId);
+        const newTabs = shellTabs.filter(id => id !== shellId);
+        setShellTabs(newTabs);
+        
+        // 如果关闭的是当前活跃标签页，切换到第一个标签页
+        if (GLOBAL_STATE.activeShellId === shellId && newTabs.length > 0) {
+            GLOBAL_STATE.setActiveShellId(newTabs[0]);
+        }
+    };
+
+    const activateTab = (shellId: string) => {
+        GLOBAL_STATE.setActiveShellId(shellId);
+    };
+
+    return (
+        <div style={{ 
+            height: "100vh", 
+            padding: 20, 
+            display: "flex", 
+            flexDirection: "column",
+            overflow: "hidden"
+        }}>
+            {/* 标签页栏 */}
+            <div style={{ 
+                display: "flex", 
+                alignItems: "flex-end",
+                marginBottom: 0,
+                borderBottom: "1px solid #ccc",
+                flexShrink: 0
+            }}>
+                {shellTabs.map((shellId, index) => (
+                    <ShellTab
+                        key={shellId}
+                        shellId={shellId}
+                        tabIndex={index + 1}
+                        isActive={GLOBAL_STATE.activeShellId === shellId}
+                        onActivate={() => activateTab(shellId)}
+                        onClose={() => closeTab(shellId)}
+                    />
+                ))}
+                <div
+                    onClick={addNewTab}
+                    style={{
+                        marginLeft: 8,
+                        marginBottom: 8,
+                        backgroundColor: "transparent",
+                        border: "1px solid transparent",
+                        borderRadius: 4,
+                        width: 32,
+                        height: 32,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        cursor: "pointer",
+                        fontSize: 18,
+                        fontWeight: "bold",
+                        color: "#323130",
+                    }}
+                    onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = "#f3f2f1";
+                        e.currentTarget.style.border = "1px solid #ccc";
+                    }}
+                    onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = "transparent";
+                        e.currentTarget.style.border = "1px solid transparent";
+                    }}
+                >
+                    +
+                </div>
+            </div>
+
+            {/* 当前活跃的终端 */}
+            <div style={{ 
+                flex: 1, 
+                paddingTop: 10,
+                minHeight: 0,
+                overflow: "hidden"
+            }}>
+                {GLOBAL_STATE.activeShellId && (
+                    <ShellTerminal shellId={GLOBAL_STATE.activeShellId} />
+                )}
+            </div>
+        </div>
+    );
+});
+
+export default InteractiveShell;
