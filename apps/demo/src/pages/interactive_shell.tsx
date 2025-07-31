@@ -1,5 +1,4 @@
-// interactive-shell.tsx
-import { DefaultButton, Stack, TextField } from "@fluentui/react";
+import { DefaultButton } from "@fluentui/react";
 import { AdbSubprocessProtocol } from "@yume-chan/adb";
 import {
     Consumable,
@@ -9,42 +8,139 @@ import {
 } from "@yume-chan/stream-extra";
 import { observer } from "mobx-react-lite";
 import { NextPage } from "next";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef } from "react";
 import { GLOBAL_STATE } from "../state";
+
 const InteractiveShell: NextPage = () => {
-    const [shell, setShell] = useState<AdbSubprocessProtocol | null>(null);
-    const [output, setOutput] = useState<string>("");
-    const [input, setInput] = useState<string>("");
-    const [isConnected, setIsConnected] = useState<boolean>(false);
+    const shellContainerRef = useRef<HTMLDivElement>(null);
+    
+    // 使用全局状态
+    const shell = GLOBAL_STATE.shell;
+    const output = GLOBAL_STATE.shellOutput;
+    const isConnected = GLOBAL_STATE.shellConnected;
     const writerRef = useRef<WritableStreamDefaultWriter<Consumable<Uint8Array>> | null>(null);
-    const outputRef = useRef<string>("");
+
+    // 简单的字符处理
+    const processOutput = (newText: string, currentOutput: string): string => {
+        let result = currentOutput;
+        
+        for (let i = 0; i < newText.length; i++) {
+            const char = newText[i];
+            const code = newText.charCodeAt(i);
+            
+            if (code === 8) { // 退格 \b
+                result = result.slice(0, -1);
+            } else if (code === 13) { // 回车 \r
+                // 只有在后面紧跟换行符时才处理，否则忽略单独的\r
+                if (i + 1 < newText.length && newText.charCodeAt(i + 1) === 10) {
+                    result += '\n';
+                    i++; // 跳过下一个\n
+                }
+                // 单独的\r不做处理，保持现有内容
+            } else if (code === 7) { // 响铃 - 忽略
+                continue;
+            } else if (char === '\x1b') { // ESC序列
+                let j = i + 1;
+                while (j < newText.length) {
+                    const escChar = newText[j];
+                    if ((escChar >= 'A' && escChar <= 'Z') || 
+                        (escChar >= 'a' && escChar <= 'z') ||
+                        escChar === '~') {
+                        break;
+                    }
+                    j++;
+                }
+                
+                const sequence = newText.substring(i, j + 1);
+                // 只处理明确的清屏命令
+                if (sequence === '\x1b[2J' || sequence === '\x1b[H\x1b[2J') {
+                    result = ''; // 清屏
+                }
+                i = j;
+            } else {
+                result += char;
+            }
+        }
+        
+        return result;
+    };
+
+    // 自动滚动和设置光标 - 分离这些操作
+    const scrollToBottom = () => {
+        if (shellContainerRef.current) {
+            shellContainerRef.current.scrollTop = shellContainerRef.current.scrollHeight;
+        }
+    };
+
+    // 设置光标到末尾并滚动到底部
+    const updateCursorAndScroll = () => {
+        if (shellContainerRef.current && isConnected) {
+            const container = shellContainerRef.current;
+            
+            requestAnimationFrame(() => {
+                container.focus();
+                
+                // 设置光标到最末尾
+                const range = document.createRange();
+                const selection = window.getSelection();
+                
+                if (container.firstChild) {
+                    range.setStartAfter(container.lastChild || container.firstChild);
+                    range.collapse(true);
+                } else {
+                    range.selectNodeContents(container);
+                    range.collapse(false);
+                }
+                
+                selection?.removeAllRanges();
+                selection?.addRange(range);
+                
+                // 滚动到底部
+                scrollToBottom();
+            });
+        }
+    };
+
+    useEffect(() => {
+        // 当output更新时，更新光标位置和滚动
+        if (isConnected) {
+            updateCursorAndScroll();
+        }
+    }, [output, isConnected]);
 
     useEffect(() => {
         initializeShell();
-        return () => {
-            cleanup();
-        };
+        // 移除cleanup，让shell在页面切换时保持活跃
     }, []);
 
     const initializeShell = async () => {
         if (!GLOBAL_STATE.adb) return;
 
+        // 如果已经有连接的shell，直接返回
+        if (GLOBAL_STATE.shell && GLOBAL_STATE.shellConnected) {
+            writerRef.current = GLOBAL_STATE.shellWriter || null;
+            return;
+        }
+
         try {
-            // 创建shell连接
-            const shellInstance = await GLOBAL_STATE.adb.subprocess.shell();
-            setShell(shellInstance);
+            GLOBAL_STATE.setShellOutput("Initializing shell...\n");
             
-            // 获取writer用于输入
+            const shellInstance = await GLOBAL_STATE.adb.subprocess.shell();
+            GLOBAL_STATE.shell = shellInstance;
+            
             const writer = shellInstance.stdin.getWriter();
             writerRef.current = writer;
+            GLOBAL_STATE.shellWriter = writer;
 
-            // 设置输出流监听
+            // 使用全局状态中的输出作为基础，而不是重置为空字符串
+            let currentOutput = GLOBAL_STATE.shellOutput;
+
             shellInstance.stdout.pipeTo(
                 new WritableStream({
                     write: (chunk) => {
                         const text = new TextDecoder().decode(chunk);
-                        outputRef.current += text;
-                        setOutput(outputRef.current);
+                        currentOutput = processOutput(text, currentOutput);
+                        GLOBAL_STATE.setShellOutput(currentOutput);
                     },
                     close() {
                         console.log("stdout stream closed");
@@ -54,16 +150,15 @@ const InteractiveShell: NextPage = () => {
                     }
                 })
             ).catch(error => {
-                console.log("stdout pipe error (expected on disconnect):", error);
+                console.log("stdout pipe error:", error);
             });
 
-            // 监听错误流
             shellInstance.stderr?.pipeTo(
                 new WritableStream({
                     write: (chunk) => {
                         const text = new TextDecoder().decode(chunk);
-                        outputRef.current += `[ERROR]: ${text}`;
-                        setOutput(outputRef.current);
+                        currentOutput += text;
+                        GLOBAL_STATE.setShellOutput(currentOutput);
                     },
                     close() {
                         console.log("stderr stream closed");
@@ -73,31 +168,23 @@ const InteractiveShell: NextPage = () => {
                     }
                 })
             ).catch(error => {
-                console.log("stderr pipe error (expected on disconnect):", error);
+                console.log("stderr pipe error:", error);
             });
 
-            // 监听进程退出
             shellInstance.exit.then((exitCode) => {
-                outputRef.current += `\n[Process exited with code: ${exitCode}]\n`;
-                setOutput(outputRef.current);
-                setIsConnected(false);
+                GLOBAL_STATE.setShellOutput(GLOBAL_STATE.shellOutput + `\n[Process exited with code: ${exitCode}]\n`);
+                GLOBAL_STATE.setShellConnected(false);
             }).catch(error => {
-                // 这里捕获 "Socket ended without exit message" 错误
-                console.log("Shell exit error (expected on force disconnect):", error);
-                outputRef.current += `\n[Shell disconnected]\n`;
-                setOutput(outputRef.current);
-                setIsConnected(false);
+                console.log("Shell exit error:", error);
+                GLOBAL_STATE.setShellOutput(GLOBAL_STATE.shellOutput + `\n[Shell disconnected]\n`);
+                GLOBAL_STATE.setShellConnected(false);
             });
 
-            setIsConnected(true);
-            
-            // 发送初始化命令，比如设置PS1提示符
-            await sendCommand("export PS1='$ '\n");
+            GLOBAL_STATE.setShellConnected(true);
             
         } catch (error) {
             console.error("Failed to initialize shell:", error);
-            outputRef.current += `[ERROR]: Failed to initialize shell: ${error}\n`;
-            setOutput(outputRef.current);
+            GLOBAL_STATE.setShellOutput(`[ERROR]: Failed to initialize shell: ${error}\n`);
         }
     };
 
@@ -105,100 +192,131 @@ const InteractiveShell: NextPage = () => {
         if (!writerRef.current || !isConnected) return;
 
         try {
-        const encoder = new TextEncoder();
-        const data = encoder.encode(command);
-        
-        // 使用 ConsumableWritableStream.write 而不是直接调用 writer.write
-        await ConsumableWritableStream.write(writerRef.current, data);
-        
-        // 添加命令到输出显示
-        // outputRef.current += `${command}`;
-        // setOutput(outputRef.current);
-            
+            const encoder = new TextEncoder();
+            const data = encoder.encode(command);
+            await ConsumableWritableStream.write(writerRef.current, data);
         } catch (error) {
             console.error("Failed to send command:", error);
-            outputRef.current += `[ERROR]: Failed to send command: ${error}\n`;
-            setOutput(outputRef.current);
+            GLOBAL_STATE.setShellOutput(GLOBAL_STATE.shellOutput + `[ERROR]: Failed to send command: ${error}\n`);
         }
     };
 
-    const handleInputSubmit = async () => {
-        if (!input.trim()) return;
-
-        const command = input.endsWith('\n') ? input : input + '\n';
-        await sendCommand(command);
-        setInput("");
-    };
-
-    const handleKeyPress = (event: React.KeyboardEvent) => {
-        if (event.key === 'Enter' && !event.shiftKey) {
+    const handleKeyDown = async (event: React.KeyboardEvent<HTMLDivElement>) => {
+        if (!isConnected) {
             event.preventDefault();
-            handleInputSubmit();
+            return;
         }
+
+        event.preventDefault();
+
+        const key = event.key;
+
+        if (event.ctrlKey) {
+            switch (key.toLowerCase()) {
+                case 'c':
+                    await sendCommand('\x03');
+                    return;
+                case 'd':
+                    await sendCommand('\x04');
+                    return;
+                case 'z':
+                    await sendCommand('\x1a');
+                    return;
+                case 'l':
+                    await sendCommand('\x0c');
+                    return;
+                case 'u':
+                    await sendCommand('\x15');
+                    return;
+            }
+        }
+
+        switch (key) {
+            case 'Enter':
+                await sendCommand('\r');
+                break;
+            case 'Backspace':
+                await sendCommand('\x7f');
+                break;
+            case 'Delete':
+                await sendCommand('\x1b[3~');
+                break;
+            case 'Tab':
+                await sendCommand('\t');
+                break;
+            case 'ArrowUp':
+                await sendCommand('\x1b[A');
+                break;
+            case 'ArrowDown':
+                await sendCommand('\x1b[B');
+                break;
+            case 'ArrowLeft':
+                await sendCommand('\x1b[D');
+                break;
+            case 'ArrowRight':
+                await sendCommand('\x1b[C');
+                break;
+            case 'Home':
+                await sendCommand('\x1b[H');
+                break;
+            case 'End':
+                await sendCommand('\x1b[F');
+                break;
+            default:
+                if (key.length === 1 && !event.altKey && !event.metaKey) {
+                    await sendCommand(key);
+                }
+                break;
+        }
+    };
+
+    const handlePaste = async (event: React.ClipboardEvent<HTMLDivElement>) => {
+        event.preventDefault();
+        if (!isConnected) return;
+
+        const pastedText = event.clipboardData.getData('text');
+        await sendCommand(pastedText);
+    };
+
+    // 完全阻止contentEditable的默认编辑行为
+    const handleBeforeInput = (event: React.FormEvent<HTMLDivElement>) => {
+        event.preventDefault();
+        return false;
+    };
+
+    const handleInput = (event: React.FormEvent<HTMLDivElement>) => {
+        event.preventDefault();
+        // 如果内容被意外修改，恢复正确的内容
+        if (shellContainerRef.current && shellContainerRef.current.textContent !== output) {
+            updateCursorAndScroll();
+        }
+        return false;
     };
 
     const cleanup = async () => {
-        try {
-            // 先设置连接状态为false
-            setIsConnected(false);
-            
-            // 关闭writer
-            if (writerRef.current) {
-                try {
-                    await writerRef.current.close();
-                } catch (error) {
-                    console.log("Writer already closed");
-                }
-                writerRef.current = null;
-            }
-            
-            // 发送exit命令来优雅地退出shell，而不是强制kill
-            if (shell && isConnected) {
-                try {
-                    // 尝试优雅退出
-                    const encoder = new TextEncoder();
-                    const exitCommand = encoder.encode("exit\n");
-                    
-                    // 如果writer还可用，发送exit命令
-                    if (writerRef.current) {
-                        await ConsumableWritableStream.write(writerRef.current, exitCommand);
-                    }
-                    
-                    // 等待一小段时间让进程正常退出
-                    setTimeout(() => {
-                        if (shell) {
-                            shell.kill();
-                        }
-                    }, 1000);
-                    
-                } catch (error) {
-                    // 如果优雅退出失败，直接kill
-                    console.log("Graceful exit failed, force killing");
-                    shell.kill();
-                }
-            }
-            
-            setShell(null);
-            
-        } catch (error) {
-            console.error("Error during cleanup:", error);
-            // 即使出错也要重置状态
-            setIsConnected(false);
-            setShell(null);
-            writerRef.current = null;
-        }
+        await GLOBAL_STATE.cleanupShell();
+        writerRef.current = null;
     };
 
     const clearOutput = () => {
-        outputRef.current = "";
-        setOutput("");
+        GLOBAL_STATE.clearShellOutput();
+    };
+
+    const handleClick = () => {
+        if (isConnected && shellContainerRef.current) {
+            updateCursorAndScroll();
+        }
     };
 
     return (
-        <Stack tokens={{ childrenGap: 10 }} style={{ height: "100vh", padding: 20 }}>
-            <h2>Interactive Shell</h2>
-            
-            <div style={{ display: "flex", gap: 10 }}>
+        <div style={{ 
+            height: "100vh", 
+            padding: 20, 
+            display: "flex", 
+            flexDirection: "column",
+            gap: 10
+        }}>
+            <div style={{ display: "flex", gap: 10, flexShrink: 0 }}>
                 <DefaultButton 
                     text="Reconnect" 
                     onClick={initializeShell}
@@ -215,41 +333,41 @@ const InteractiveShell: NextPage = () => {
                 />
             </div>
 
-            <div style={{ 
-                border: "1px solid #ccc", 
-                borderRadius: 4,
-                backgroundColor: "#1e1e1e",
-                color: "#fff",
-                padding: 10,
-                fontFamily: "monospace",
-                fontSize: 14,
-                height: "400px",
-                overflowY: "auto",
-                whiteSpace: "pre-wrap"
-            }}>
-                {output || "Waiting for shell output..."}
+            <div 
+                ref={shellContainerRef}
+                contentEditable={isConnected}
+                suppressContentEditableWarning={true}
+                onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
+                onInput={handleInput}
+                onBeforeInput={handleBeforeInput}
+                onClick={handleClick}
+                style={{ 
+                    border: "1px solid #ccc", 
+                    borderRadius: 4,
+                    backgroundColor: "#1e1e1e",
+                    color: "#fff",
+                    padding: 10,
+                    fontFamily: "monospace, Consolas, 'Courier New'",
+                    fontSize: 14,
+                    lineHeight: 1.2,
+                    flex: 1,
+                    overflowY: "auto",
+                    whiteSpace: "pre-wrap",
+                    outline: 'none',
+                    cursor: isConnected ? 'text' : 'default',
+                    minHeight: "100px"
+                }}
+                tabIndex={0}
+            >
+                {/* 显示输出内容，未连接时显示等待消息 */}
+                {output || (!isConnected ? "Waiting for shell connection..." : "")}
             </div>
 
-            <div style={{ display: "flex", gap: 10 }}>
-                <TextField
-                    value={input}
-                    onChange={(_, value) => setInput(value || "")}
-                    onKeyPress={handleKeyPress}
-                    placeholder="Enter command..."
-                    disabled={!isConnected}
-                    styles={{ root: { flexGrow: 1 } }}
-                />
-                <DefaultButton 
-                    text="Send" 
-                    onClick={handleInputSubmit}
-                    disabled={!isConnected || !input.trim()}
-                />
+            <div style={{ fontSize: 12, color: "#666", flexShrink: 0 }}>
+                Status: {isConnected ? "Connected - Click above to focus and type" : "Disconnected"}
             </div>
-
-            <div style={{ fontSize: 12, color: "#666" }}>
-                Status: {isConnected ? "Connected" : "Disconnected"}
-            </div>
-        </Stack>
+        </div>
     );
 };
 

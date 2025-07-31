@@ -1,4 +1,6 @@
-import { Adb, AdbDaemonDevice, AdbPacketData } from "@yume-chan/adb";
+import { Adb, AdbDaemonDevice, AdbPacketData, AdbSubprocessProtocol } from "@yume-chan/adb";
+import { WritableStreamDefaultWriter } from "@yume-chan/stream-extra";
+import { Consumable } from "@yume-chan/stream-extra";
 import { action, makeAutoObservable, observable } from "mobx";
 
 export type PacketLogItemDirection = "in" | "out";
@@ -22,10 +24,20 @@ export class GlobalState {
 
     logs: PacketLogItem[] = [];
 
+    // Interactive Shell state
+    shell: AdbSubprocessProtocol | undefined = undefined;
+    shellOutput = "";
+    shellConnected = false;
+    shellWriter: WritableStreamDefaultWriter<Consumable<Uint8Array>> | undefined = undefined;
+
     constructor() {
         makeAutoObservable(this, {
             hideErrorDialog: action.bound,
             logs: observable.shallow,
+            setShellOutput: action.bound,
+            setShellConnected: action.bound,
+            clearShellOutput: action.bound,
+            cleanupShell: action.bound,
         });
     }
 
@@ -58,6 +70,44 @@ export class GlobalState {
 
     clearLog() {
         this.logs.length = 0;
+    }
+
+    setShellOutput(output: string) {
+        this.shellOutput = output;
+    }
+
+    setShellConnected(connected: boolean) {
+        this.shellConnected = connected;
+    }
+
+    clearShellOutput() {
+        this.shellOutput = "";
+    }
+
+    async cleanupShell() {
+        try {
+            this.shellConnected = false;
+
+            if (this.shellWriter) {
+                try {
+                    await this.shellWriter.close();
+                } catch (error) {
+                    console.log("Writer already closed");
+                }
+                this.shellWriter = undefined;
+            }
+
+            if (this.shell) {
+                try {
+                    this.shell.kill();
+                } catch (error) {
+                    console.log("Error killing shell:", error);
+                }
+                this.shell = undefined;
+            }
+        } catch (error) {
+            console.error("Error during shell cleanup:", error);
+        }
     }
 }
 

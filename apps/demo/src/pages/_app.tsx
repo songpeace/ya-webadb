@@ -44,7 +44,7 @@ const BASE_ROUTES = [
         name: "Screen Capture",
     },
     {
-        url: "/shell",
+        url: "/interactive_shell",
         icon: Icons.WindowConsole,
         name: "Interactive Shell",
     },
